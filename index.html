@@ -12,6 +12,7 @@
     <!-- Firebase SDKs -->
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-storage-compat.js"></script>
 </head>
 <body>
     <div id="root"></div>
@@ -19,7 +20,7 @@
     <script type="text/babel">
         const { useState, useEffect } = React;
 
-        // Firebase configuration - REPLACE WITH YOUR VALUES
+        // Firebase configuration
         const firebaseConfig = {
             apiKey: "AIzaSyCd2dF67723Ejjea6Suznc3RBrqc0ELDMc",
             authDomain: "prompt-repository-b506c.firebaseapp.com",
@@ -32,6 +33,7 @@
         // Initialize Firebase
         firebase.initializeApp(firebaseConfig);
         const db = firebase.firestore();
+        const storage = firebase.storage();
 
         // Simple icon components
         const PlusIcon = () => <span>➕</span>;
@@ -43,6 +45,9 @@
         const ChevronDownIcon = () => <span>▼</span>;
         const ChevronUpIcon = () => <span>▲</span>;
         const HelpIcon = () => <span>❓</span>;
+        const PaperclipIcon = () => <span>📎</span>;
+        const DownloadIcon = () => <span>⬇️</span>;
+        const UploadIcon = () => <span>📤</span>;
 
         const PromptRepository = () => {
             const [prompts, setPrompts] = useState([]);
@@ -72,6 +77,8 @@
             const [isFaqOpen, setIsFaqOpen] = useState(false);
             const [showAccessModal, setShowAccessModal] = useState(false);
             const [pendingPrompt, setPendingPrompt] = useState(null);
+            const [uploadingFiles, setUploadingFiles] = useState({});
+            const [promptFiles, setPromptFiles] = useState({});
 
             // Load prompts from Firestore
             useEffect(() => {
@@ -82,6 +89,11 @@
                     }));
                     setPrompts(promptsData);
                     setLoading(false);
+                    
+                    // Load files for each prompt
+                    promptsData.forEach(prompt => {
+                        loadPromptFiles(prompt.id);
+                    });
                 }, (error) => {
                     console.error('Error loading prompts:', error);
                     alert('Error loading prompts: ' + error.message);
@@ -103,6 +115,82 @@
 
                 return () => unsubscribe();
             }, []);
+
+            const loadPromptFiles = async (promptId) => {
+                try {
+                    const filesRef = storage.ref(`prompts/${promptId}`);
+                    const result = await filesRef.listAll();
+                    
+                    const filesData = await Promise.all(
+                        result.items.map(async (item) => {
+                            const url = await item.getDownloadURL();
+                            const metadata = await item.getMetadata();
+                            return {
+                                name: item.name,
+                                url: url,
+                                size: metadata.size,
+                                contentType: metadata.contentType
+                            };
+                        })
+                    );
+                    
+                    setPromptFiles(prev => ({
+                        ...prev,
+                        [promptId]: filesData
+                    }));
+                } catch (error) {
+                    console.error('Error loading files:', error);
+                }
+            };
+
+            const handleFileUpload = async (promptId, files) => {
+                const fileArray = Array.from(files);
+                
+                // Check file sizes
+                const oversizedFiles = fileArray.filter(f => f.size > 10 * 1024 * 1024);
+                if (oversizedFiles.length > 0) {
+                    alert(`The following files are too large (max 10 MB):\n${oversizedFiles.map(f => f.name).join('\n')}`);
+                    return;
+                }
+                
+                setUploadingFiles(prev => ({ ...prev, [promptId]: true }));
+                
+                try {
+                    await Promise.all(
+                        fileArray.map(async (file) => {
+                            const storageRef = storage.ref(`prompts/${promptId}/${file.name}`);
+                            await storageRef.put(file);
+                        })
+                    );
+                    
+                    await loadPromptFiles(promptId);
+                    alert(`${fileArray.length} file(s) uploaded successfully!`);
+                } catch (error) {
+                    console.error('Error uploading files:', error);
+                    alert('Error uploading files: ' + error.message);
+                } finally {
+                    setUploadingFiles(prev => ({ ...prev, [promptId]: false }));
+                }
+            };
+
+            const deleteFile = async (promptId, fileName) => {
+                if (confirm(`Delete ${fileName}?`)) {
+                    try {
+                        const storageRef = storage.ref(`prompts/${promptId}/${fileName}`);
+                        await storageRef.delete();
+                        await loadPromptFiles(promptId);
+                    } catch (error) {
+                        console.error('Error deleting file:', error);
+                        alert('Error deleting file: ' + error.message);
+                    }
+                }
+            };
+
+            const formatFileSize = (bytes) => {
+                if (bytes < 1024) return bytes + ' B';
+                if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+                return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+            };
 
             const openModal = (prompt = null) => {
                 if (prompt) {
@@ -172,8 +260,14 @@
             };
 
             const deletePrompt = async (id) => {
-                if (confirm('Are you sure you want to delete this prompt?')) {
+                if (confirm('Are you sure you want to delete this prompt? This will also delete all attached files.')) {
                     try {
+                        // Delete all files first
+                        const filesRef = storage.ref(`prompts/${id}`);
+                        const result = await filesRef.listAll();
+                        await Promise.all(result.items.map(item => item.delete()));
+                        
+                        // Then delete the prompt
                         await db.collection('prompts').doc(id).delete();
                     } catch (error) {
                         console.error('Error deleting prompt:', error);
@@ -204,11 +298,18 @@
                 
                 const model = aiModels.find(m => m.id === selectedModel);
                 
+                const files = promptFiles[pendingPrompt.id] || [];
+                const fileMessage = files.length > 0 
+                    ? `\n\nAttached files (${files.length}):\n${files.map(f => `• ${f.name} (${formatFileSize(f.size)})`).join('\n')}\n\nDownload these files first, then upload them to the AI along with your prompt!`
+                    : '';
+                
                 if (useIncognito) {
                     alert('Opening in a new tab. To use incognito/private mode:\n\n' +
                         '• Desktop: Right-click the link and select "Open in Incognito/Private Window"\n' +
                         '• Mobile: Long-press the tab switcher and select "New Incognito Tab", then paste the URL\n\n' +
-                        'Your prompt has been copied - paste it when ready!');
+                        'Your prompt has been copied - paste it when ready!' + fileMessage);
+                } else if (files.length > 0) {
+                    alert('Your prompt has been copied!' + fileMessage);
                 }
                 
                 setTimeout(() => {
@@ -346,6 +447,9 @@
                             <div className="grid gap-4">
                                 {prompts.sort((a, b) => a.name.localeCompare(b.name)).map(prompt => {
                                     const isExpanded = expandedPrompts[prompt.id];
+                                    const files = promptFiles[prompt.id] || [];
+                                    const isUploading = uploadingFiles[prompt.id];
+                                    
                                     return (
                                         <div key={prompt.id} className="border border-gray-200 rounded-lg p-4 md:p-6 hover:shadow-md transition-shadow">
                                             <div className="flex justify-between items-start mb-3">
@@ -355,6 +459,11 @@
                                                         <span className="bg-indigo-100 text-indigo-800 text-xs px-2 py-1 rounded whitespace-nowrap">
                                                             v{prompt.version}
                                                         </span>
+                                                        {files.length > 0 && (
+                                                            <span className="bg-green-100 text-green-800 text-xs px-2 py-1 rounded whitespace-nowrap flex items-center gap-1">
+                                                                <PaperclipIcon /> {files.length}
+                                                            </span>
+                                                        )}
                                                     </div>
                                                     <p className="text-sm md:text-base text-gray-600 mb-2 break-words">{prompt.description}</p>
                                                     <div className="text-xs md:text-sm text-gray-500">
@@ -365,26 +474,81 @@
                                                 <div className="flex gap-1 md:gap-2 flex-shrink-0">
                                                     <button
                                                         onClick={() => copyToClipboard(prompt.prompt)}
-                                                        className="p-2 md:p-2 text-gray-600 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors touch-manipulation"
+                                                        className="p-2 text-gray-600 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors touch-manipulation"
                                                         title="Copy prompt"
                                                     >
                                                         <CopyIcon />
                                                     </button>
                                                     <button
                                                         onClick={() => openModal(prompt)}
-                                                        className="p-2 md:p-2 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors touch-manipulation"
+                                                        className="p-2 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors touch-manipulation"
                                                         title="Edit prompt"
                                                     >
                                                         <EditIcon />
                                                     </button>
                                                     <button
                                                         onClick={() => deletePrompt(prompt.id)}
-                                                        className="p-2 md:p-2 text-gray-600 hover:text-red-600 hover:bg-red-50 rounded transition-colors touch-manipulation"
+                                                        className="p-2 text-gray-600 hover:text-red-600 hover:bg-red-50 rounded transition-colors touch-manipulation"
                                                         title="Delete prompt"
                                                     >
                                                         <TrashIcon />
                                                     </button>
                                                 </div>
+                                            </div>
+
+                                            {/* File Upload Section */}
+                                            <div className="mb-4 p-3 bg-gray-50 rounded border border-gray-200">
+                                                <div className="flex items-center justify-between mb-2">
+                                                    <label className="text-sm font-medium text-gray-700 flex items-center gap-2">
+                                                        <PaperclipIcon /> Attached Documents
+                                                    </label>
+                                                    <label className="cursor-pointer bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded text-xs font-medium flex items-center gap-1 transition-colors">
+                                                        <UploadIcon /> Upload
+                                                        <input
+                                                            type="file"
+                                                            multiple
+                                                            onChange={(e) => handleFileUpload(prompt.id, e.target.files)}
+                                                            className="hidden"
+                                                            disabled={isUploading}
+                                                        />
+                                                    </label>
+                                                </div>
+                                                
+                                                {isUploading && (
+                                                    <div className="text-sm text-blue-600 mb-2">Uploading files...</div>
+                                                )}
+                                                
+                                                {files.length > 0 ? (
+                                                    <div className="space-y-1">
+                                                        {files.map((file, idx) => (
+                                                            <div key={idx} className="flex items-center justify-between bg-white p-2 rounded text-sm">
+                                                                <span className="flex-1 truncate text-gray-700">{file.name}</span>
+                                                                <span className="text-xs text-gray-500 mx-2">{formatFileSize(file.size)}</span>
+                                                                <div className="flex gap-1">
+                                                                    <a
+                                                                        href={file.url}
+                                                                        download={file.name}
+                                                                        className="p-1 text-green-600 hover:text-green-700"
+                                                                        title="Download"
+                                                                    >
+                                                                        <DownloadIcon />
+                                                                    </a>
+                                                                    <button
+                                                                        onClick={() => deleteFile(prompt.id, file.name)}
+                                                                        className="p-1 text-red-500 hover:text-red-700"
+                                                                        title="Delete"
+                                                                    >
+                                                                        <TrashIcon />
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                ) : (
+                                                    <div className="text-sm text-gray-500 text-center py-2">
+                                                        No files attached. Upload documents to reference with this prompt.
+                                                    </div>
+                                                )}
                                             </div>
 
                                             <button
@@ -596,7 +760,18 @@
                                 <div className="p-4 md:p-6 space-y-4">
                                     <div>
                                         <h3 className="font-semibold text-lg mb-2">✨ Your prompts are saved in the cloud!</h3>
-                                        <p className="text-gray-700">All changes sync automatically across your devices. Access this URL from anywhere!</p>
+                                        <p className="text-gray-700">All changes sync automatically across your devices.</p>
+                                    </div>
+                                    <div>
+                                        <h3 className="font-semibold mb-2">📎 Attaching Documents</h3>
+                                        <p className="text-gray-700 mb-2">You can now upload reference documents (Word, PDF, etc.) to any prompt:</p>
+                                        <ul className="list-disc ml-6 text-gray-700 space-y-1">
+                                            <li>Click the "Upload" button in the "Attached Documents" section</li>
+                                            <li>Select one or multiple files (max 10 MB each)</li>
+                                            <li>Files are saved with your prompt in the cloud</li>
+                                            <li>Download files when you need them by clicking the download icon</li>
+                                            <li>When you run a prompt with files, you'll be reminded to download and upload them to the AI</li>
+                                        </ul>
                                     </div>
                                     <div>
                                         <h3 className="font-semibold mb-2">Creating Prompts</h3>
@@ -604,7 +779,7 @@
                                     </div>
                                     <div>
                                         <h3 className="font-semibold mb-2">Using Prompts</h3>
-                                        <p className="text-gray-700">Select an AI model, click "Open AI", choose login or guest mode, then paste the prompt when the AI opens.</p>
+                                        <p className="text-gray-700">Select an AI model, click "Open AI", choose login or guest mode, then paste the prompt when the AI opens. If files are attached, download them first and upload to the AI along with your prompt.</p>
                                     </div>
                                     <div>
                                         <h3 className="font-semibold mb-2">Editing</h3>
