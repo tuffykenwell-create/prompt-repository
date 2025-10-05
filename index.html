@@ -8,7 +8,6 @@
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
     
     <!-- Firebase SDKs -->
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
@@ -19,9 +18,8 @@
 
     <script type="text/babel">
         const { useState, useEffect } = React;
-        const { Plus, Edit2, Trash2, Copy, ExternalLink, X, ChevronDown, ChevronUp, HelpCircle } = lucide;
 
-        // TODO: Replace with your Firebase configuration
+        // Firebase configuration - REPLACE WITH YOUR VALUES
         const firebaseConfig = {
             apiKey: "AIzaSyCd2dF67723Ejjea6Suznc3RBrqc0ELDMc",
             authDomain: "prompt-repository-b506c.firebaseapp.com",
@@ -34,6 +32,17 @@
         // Initialize Firebase
         firebase.initializeApp(firebaseConfig);
         const db = firebase.firestore();
+
+        // Simple icon components
+        const PlusIcon = () => <span>➕</span>;
+        const EditIcon = () => <span>✏️</span>;
+        const TrashIcon = () => <span>🗑️</span>;
+        const CopyIcon = () => <span>📋</span>;
+        const ExternalLinkIcon = () => <span>🔗</span>;
+        const XIcon = () => <span>✖️</span>;
+        const ChevronDownIcon = () => <span>▼</span>;
+        const ChevronUpIcon = () => <span>▲</span>;
+        const HelpIcon = () => <span>❓</span>;
 
         const PromptRepository = () => {
             const [prompts, setPrompts] = useState([]);
@@ -75,6 +84,7 @@
                     setLoading(false);
                 }, (error) => {
                     console.error('Error loading prompts:', error);
+                    alert('Error loading prompts: ' + error.message);
                     setLoading(false);
                 });
 
@@ -157,7 +167,7 @@
                     closeModal();
                 } catch (error) {
                     console.error('Error saving prompt:', error);
-                    alert('Error saving prompt. Please try again.');
+                    alert('Error saving prompt: ' + error.message);
                 }
             };
 
@@ -167,7 +177,7 @@
                         await db.collection('prompts').doc(id).delete();
                     } catch (error) {
                         console.error('Error deleting prompt:', error);
-                        alert('Error deleting prompt. Please try again.');
+                        alert('Error deleting prompt: ' + error.message);
                     }
                 }
             };
@@ -244,7 +254,7 @@
                     closeModelModal();
                 } catch (error) {
                     console.error('Error adding model:', error);
-                    alert('Error adding model. Please try again.');
+                    alert('Error adding model: ' + error.message);
                 }
             };
 
@@ -257,7 +267,7 @@
                         }
                     } catch (error) {
                         console.error('Error deleting model:', error);
-                        alert('Error deleting model. Please try again.');
+                        alert('Error deleting model: ' + error.message);
                     }
                 }
             };
@@ -291,14 +301,14 @@
                                         onClick={() => setIsFaqOpen(true)}
                                         className="flex-1 sm:flex-initial bg-gray-600 hover:bg-gray-700 text-white px-4 py-3 md:py-2 rounded-lg flex items-center justify-center gap-2 transition-colors touch-manipulation font-medium"
                                     >
-                                        <HelpCircle size={20} />
+                                        <HelpIcon />
                                         <span className="sm:inline">Help</span>
                                     </button>
                                     <button
                                         onClick={() => openModal()}
                                         className="flex-1 sm:flex-initial bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-3 md:py-2 rounded-lg flex items-center justify-center gap-2 transition-colors touch-manipulation font-medium"
                                     >
-                                        <Plus size={20} />
+                                        <PlusIcon />
                                         New Prompt
                                     </button>
                                 </div>
@@ -311,7 +321,7 @@
                                         onClick={openModelModal}
                                         className="w-full sm:w-auto bg-green-600 hover:bg-green-700 text-white px-3 py-2 rounded text-sm font-medium flex items-center justify-center gap-2 transition-colors touch-manipulation"
                                     >
-                                        <Plus size={16} />
+                                        <PlusIcon />
                                         Add Model
                                     </button>
                                 </div>
@@ -325,7 +335,7 @@
                                                     className="text-red-500 hover:text-red-700 touch-manipulation p-1"
                                                     title="Delete model"
                                                 >
-                                                    <X size={14} />
+                                                    <XIcon />
                                                 </button>
                                             )}
                                         </div>
@@ -358,21 +368,21 @@
                                                         className="p-2 md:p-2 text-gray-600 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors touch-manipulation"
                                                         title="Copy prompt"
                                                     >
-                                                        <Copy size={18} />
+                                                        <CopyIcon />
                                                     </button>
                                                     <button
                                                         onClick={() => openModal(prompt)}
                                                         className="p-2 md:p-2 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors touch-manipulation"
                                                         title="Edit prompt"
                                                     >
-                                                        <Edit2 size={18} />
+                                                        <EditIcon />
                                                     </button>
                                                     <button
                                                         onClick={() => deletePrompt(prompt.id)}
                                                         className="p-2 md:p-2 text-gray-600 hover:text-red-600 hover:bg-red-50 rounded transition-colors touch-manipulation"
                                                         title="Delete prompt"
                                                     >
-                                                        <Trash2 size={18} />
+                                                        <TrashIcon />
                                                     </button>
                                                 </div>
                                             </div>
@@ -384,7 +394,7 @@
                                                 <span className="text-sm font-medium text-gray-700">
                                                     {isExpanded ? 'Hide Prompt' : 'Show Prompt'}
                                                 </span>
-                                                {isExpanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+                                                {isExpanded ? <ChevronUpIcon /> : <ChevronDownIcon />}
                                             </button>
 
                                             {isExpanded && (
@@ -411,7 +421,7 @@
                                                     disabled={runningPromptId === prompt.id}
                                                     className="w-full sm:w-auto bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white px-4 py-2 rounded text-sm font-medium flex items-center justify-center gap-2 transition-colors touch-manipulation"
                                                 >
-                                                    <ExternalLink size={16} />
+                                                    <ExternalLinkIcon />
                                                     {runningPromptId === prompt.id ? 'Opening...' : 'Open AI'}
                                                 </button>
                                             </div>
@@ -429,7 +439,6 @@
                         </div>
                     </div>
 
-                    {/* Modal for creating/editing prompts */}
                     {isModalOpen && (
                         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 md:p-4 z-50">
                             <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
@@ -441,7 +450,7 @@
                                         onClick={closeModal}
                                         className="text-gray-400 hover:text-gray-600 transition-colors p-2 touch-manipulation"
                                     >
-                                        <X size={24} />
+                                        <XIcon />
                                     </button>
                                 </div>
 
@@ -512,7 +521,6 @@
                         </div>
                     )}
 
-                    {/* Modal for adding AI models */}
                     {isModelModalOpen && (
                         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 md:p-4 z-50">
                             <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
@@ -522,7 +530,7 @@
                                         onClick={closeModelModal}
                                         className="text-gray-400 hover:text-gray-600 transition-colors p-2 touch-manipulation"
                                     >
-                                        <X size={24} />
+                                        <XIcon />
                                     </button>
                                 </div>
 
@@ -573,27 +581,40 @@
                         </div>
                     )}
 
-                    {/* FAQ Modal - keeping it short for space, you have the full version */}
                     {isFaqOpen && (
                         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 md:p-4 z-50 overflow-y-auto">
                             <div className="bg-white rounded-lg shadow-xl max-w-3xl w-full my-8 max-h-[90vh] overflow-y-auto">
                                 <div className="flex justify-between items-center p-4 md:p-6 border-b sticky top-0 bg-white z-10">
-                                    <h2 className="text-xl md:text-2xl font-bold text-gray-800">How to Use - FAQ</h2>
+                                    <h2 className="text-xl md:text-2xl font-bold text-gray-800">How to Use</h2>
                                     <button
                                         onClick={() => setIsFaqOpen(false)}
                                         className="text-gray-400 hover:text-gray-600 transition-colors p-2 touch-manipulation"
                                     >
-                                        <X size={24} />
+                                        <XIcon />
                                     </button>
                                 </div>
-                                <div className="p-4 md:p-6">
-                                    <p className="text-gray-700">Your prompts are now saved in the cloud and will persist across all devices!</p>
+                                <div className="p-4 md:p-6 space-y-4">
+                                    <div>
+                                        <h3 className="font-semibold text-lg mb-2">✨ Your prompts are saved in the cloud!</h3>
+                                        <p className="text-gray-700">All changes sync automatically across your devices. Access this URL from anywhere!</p>
+                                    </div>
+                                    <div>
+                                        <h3 className="font-semibold mb-2">Creating Prompts</h3>
+                                        <p className="text-gray-700">Click "New Prompt" and fill in the name, description, and prompt text.</p>
+                                    </div>
+                                    <div>
+                                        <h3 className="font-semibold mb-2">Using Prompts</h3>
+                                        <p className="text-gray-700">Select an AI model, click "Open AI", choose login or guest mode, then paste the prompt when the AI opens.</p>
+                                    </div>
+                                    <div>
+                                        <h3 className="font-semibold mb-2">Editing</h3>
+                                        <p className="text-gray-700">Click the ✏️ icon to edit. The version number automatically increments with each update.</p>
+                                    </div>
                                 </div>
                             </div>
                         </div>
                     )}
 
-                    {/* Access Mode Modal */}
                     {showAccessModal && (
                         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 md:p-4 z-50">
                             <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
@@ -624,7 +645,7 @@
                                             <div className="text-2xl">👤</div>
                                             <div className="flex-1">
                                                 <p className="font-semibold mb-1">Guest/Private Mode</p>
-                                                <p className="text-sm text-purple-100">One-time use. Conversation won't be saved. Opens with incognito instructions.</p>
+                                                <p className="text-sm text-purple-100">One-time use. Conversation won't be saved.</p>
                                             </div>
                                         </div>
                                     </button>
@@ -641,7 +662,7 @@
                                 </div>
 
                                 <div className="p-4 bg-gray-50 border-t">
-                                    <p className="text-xs text-gray-600 text-center">Your prompt has been copied to clipboard and is ready to paste!</p>
+                                    <p className="text-xs text-gray-600 text-center">Your prompt has been copied to clipboard!</p>
                                 </div>
                             </div>
                         </div>
