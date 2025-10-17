@@ -352,28 +352,34 @@
 
             // Get main categories (no parent)
             const getMainCategories = () => {
-                return categories.filter(c => !c.parentId);
+                return categories.filter(c => !c.parentId).sort((a, b) => a.name.localeCompare(b.name));
             };
 
             // Get subcategories for a category
             const getSubcategories = (parentId) => {
-                return categories.filter(c => c.parentId === parentId);
+                return categories.filter(c => c.parentId === parentId).sort((a, b) => a.name.localeCompare(b.name));
             };
 
             // Get prompts for a category or subcategory
             const getPromptsForCategory = (categoryId, includeSubcategories = false) => {
+                let filteredPrompts;
                 if (includeSubcategories) {
                     const subcategoryIds = getSubcategories(categoryId).map(s => s.id);
-                    return prompts.filter(p => 
+                    filteredPrompts = prompts.filter(p => 
                         p.categoryId === categoryId || 
                         subcategoryIds.includes(p.subcategoryId)
                     );
+                } else {
+                    filteredPrompts = prompts.filter(p => p.categoryId === categoryId && !p.subcategoryId);
                 }
-                return prompts.filter(p => p.categoryId === categoryId && !p.subcategoryId);
+                // Sort alphabetically by name
+                return filteredPrompts.sort((a, b) => a.name.localeCompare(b.name));
             };
 
             const getPromptsForSubcategory = (subcategoryId) => {
-                return prompts.filter(p => p.subcategoryId === subcategoryId);
+                const filteredPrompts = prompts.filter(p => p.subcategoryId === subcategoryId);
+                // Sort alphabetically by name
+                return filteredPrompts.sort((a, b) => a.name.localeCompare(b.name));
             };
 
             const toggleCategory = (categoryId) => {
