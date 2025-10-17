@@ -124,6 +124,9 @@
                     // Check if we need to create an "Uncategorized" category
                     if (categoriesData.length === 0) {
                         createUncategorizedCategory();
+                    } else {
+                        // Migrate prompts without categoryId to Uncategorized
+                        migrateUncategorizedPrompts(categoriesData);
                     }
                 }, (error) => {
                     console.error('Error loading categories:', error);
@@ -154,6 +157,42 @@
                     });
                 } catch (error) {
                     console.error('Error creating Uncategorized category:', error);
+                }
+            };
+
+            const migrateUncategorizedPrompts = async (categoriesData) => {
+                try {
+                    // Find the Uncategorized category
+                    const uncategorizedCategory = categoriesData.find(c => c.name === 'Uncategorized' && !c.parentId);
+                    
+                    if (!uncategorizedCategory) {
+                        console.log('No Uncategorized category found, creating one...');
+                        await createUncategorizedCategory();
+                        return;
+                    }
+
+                    // Get all prompts without a categoryId
+                    const promptsSnapshot = await db.collection('prompts').get();
+                    const batch = db.batch();
+                    let updateCount = 0;
+
+                    promptsSnapshot.docs.forEach(doc => {
+                        const promptData = doc.data();
+                        if (!promptData.categoryId) {
+                            batch.update(doc.ref, {
+                                categoryId: uncategorizedCategory.id,
+                                subcategoryId: null
+                            });
+                            updateCount++;
+                        }
+                    });
+
+                    if (updateCount > 0) {
+                        await batch.commit();
+                        console.log(`Migrated ${updateCount} prompts to Uncategorized category`);
+                    }
+                } catch (error) {
+                    console.error('Error migrating uncategorized prompts:', error);
                 }
             };
 
