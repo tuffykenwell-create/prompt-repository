@@ -48,16 +48,21 @@
         const PaperclipIcon = () => <span>📎</span>;
         const DownloadIcon = () => <span>⬇️</span>;
         const UploadIcon = () => <span>📤</span>;
+        const FolderIcon = () => <span>📁</span>;
+        const ChevronRightIcon = () => <span>▶</span>;
 
         const PromptRepository = () => {
             const [prompts, setPrompts] = useState([]);
+            const [categories, setCategories] = useState([]);
             const [loading, setLoading] = useState(true);
             const [isModalOpen, setIsModalOpen] = useState(false);
             const [editingPrompt, setEditingPrompt] = useState(null);
             const [formData, setFormData] = useState({
                 name: '',
                 description: '',
-                prompt: ''
+                prompt: '',
+                categoryId: '',
+                subcategoryId: ''
             });
             const [selectedModel, setSelectedModel] = useState('claude');
             const [runningPromptId, setRunningPromptId] = useState(null);
@@ -73,12 +78,16 @@
 
             const [customModels, setCustomModels] = useState([]);
             const aiModels = [...defaultModels, ...customModels];
-            const [expandedPrompts, setExpandedPrompts] = useState({});
+            const [expandedCategories, setExpandedCategories] = useState({});
+            const [expandedSubcategories, setExpandedSubcategories] = useState({});
             const [isFaqOpen, setIsFaqOpen] = useState(false);
             const [showAccessModal, setShowAccessModal] = useState(false);
             const [pendingPrompt, setPendingPrompt] = useState(null);
             const [uploadingFiles, setUploadingFiles] = useState({});
             const [promptFiles, setPromptFiles] = useState({});
+            const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
+            const [categoryFormData, setCategoryFormData] = useState({ name: '', parentId: null });
+            const [editingCategory, setEditingCategory] = useState(null);
 
             // Load prompts from Firestore
             useEffect(() => {
@@ -103,6 +112,26 @@
                 return () => unsubscribe();
             }, []);
 
+            // Load categories from Firestore
+            useEffect(() => {
+                const unsubscribe = db.collection('categories').orderBy('name').onSnapshot((snapshot) => {
+                    const categoriesData = snapshot.docs.map(doc => ({
+                        id: doc.id,
+                        ...doc.data()
+                    }));
+                    setCategories(categoriesData);
+                    
+                    // Check if we need to create an "Uncategorized" category
+                    if (categoriesData.length === 0) {
+                        createUncategorizedCategory();
+                    }
+                }, (error) => {
+                    console.error('Error loading categories:', error);
+                });
+
+                return () => unsubscribe();
+            }, []);
+
             // Load custom models from Firestore
             useEffect(() => {
                 const unsubscribe = db.collection('customModels').onSnapshot((snapshot) => {
@@ -115,6 +144,18 @@
 
                 return () => unsubscribe();
             }, []);
+
+            const createUncategorizedCategory = async () => {
+                try {
+                    await db.collection('categories').add({
+                        name: 'Uncategorized',
+                        parentId: null,
+                        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                } catch (error) {
+                    console.error('Error creating Uncategorized category:', error);
+                }
+            };
 
             const loadPromptFiles = async (promptId) => {
                 try {
@@ -144,27 +185,21 @@
             };
 
             const handleFileUpload = async (promptId, files) => {
-                const fileArray = Array.from(files);
-                
-                // Check file sizes
-                const oversizedFiles = fileArray.filter(f => f.size > 10 * 1024 * 1024);
-                if (oversizedFiles.length > 0) {
-                    alert(`The following files are too large (max 10 MB):\n${oversizedFiles.map(f => f.name).join('\n')}`);
-                    return;
-                }
-                
                 setUploadingFiles(prev => ({ ...prev, [promptId]: true }));
                 
                 try {
-                    await Promise.all(
-                        fileArray.map(async (file) => {
-                            const storageRef = storage.ref(`prompts/${promptId}/${file.name}`);
-                            await storageRef.put(file);
-                        })
-                    );
+                    for (const file of files) {
+                        if (file.size > 10 * 1024 * 1024) {
+                            alert(`File ${file.name} is too large. Maximum size is 10 MB.`);
+                            continue;
+                        }
+                        
+                        const storageRef = storage.ref(`prompts/${promptId}/${file.name}`);
+                        await storageRef.put(file);
+                    }
                     
                     await loadPromptFiles(promptId);
-                    alert(`${fileArray.length} file(s) uploaded successfully!`);
+                    alert('Files uploaded successfully!');
                 } catch (error) {
                     console.error('Error uploading files:', error);
                     alert('Error uploading files: ' + error.message);
@@ -173,16 +208,19 @@
                 }
             };
 
-            const deleteFile = async (promptId, fileName) => {
-                if (confirm(`Delete ${fileName}?`)) {
-                    try {
-                        const storageRef = storage.ref(`prompts/${promptId}/${fileName}`);
-                        await storageRef.delete();
-                        await loadPromptFiles(promptId);
-                    } catch (error) {
-                        console.error('Error deleting file:', error);
-                        alert('Error deleting file: ' + error.message);
-                    }
+            const handleDeleteFile = async (promptId, fileName) => {
+                if (!confirm(`Are you sure you want to delete ${fileName}?`)) {
+                    return;
+                }
+                
+                try {
+                    const storageRef = storage.ref(`prompts/${promptId}/${fileName}`);
+                    await storageRef.delete();
+                    await loadPromptFiles(promptId);
+                    alert('File deleted successfully!');
+                } catch (error) {
+                    console.error('Error deleting file:', error);
+                    alert('Error deleting file: ' + error.message);
                 }
             };
 
@@ -192,17 +230,148 @@
                 return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
             };
 
+            // Category management functions
+            const openCategoryModal = (category = null) => {
+                if (category) {
+                    setEditingCategory(category);
+                    setCategoryFormData({
+                        name: category.name,
+                        parentId: category.parentId || null
+                    });
+                } else {
+                    setEditingCategory(null);
+                    setCategoryFormData({ name: '', parentId: null });
+                }
+                setIsCategoryModalOpen(true);
+            };
+
+            const closeCategoryModal = () => {
+                setIsCategoryModalOpen(false);
+                setEditingCategory(null);
+                setCategoryFormData({ name: '', parentId: null });
+            };
+
+            const handleSaveCategory = async () => {
+                if (!categoryFormData.name.trim()) {
+                    alert('Please enter a category name');
+                    return;
+                }
+
+                try {
+                    const categoryData = {
+                        name: categoryFormData.name.trim(),
+                        parentId: categoryFormData.parentId || null,
+                        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                    };
+
+                    if (editingCategory) {
+                        await db.collection('categories').doc(editingCategory.id).update(categoryData);
+                        alert('Category updated successfully!');
+                    } else {
+                        await db.collection('categories').add({
+                            ...categoryData,
+                            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                        });
+                        alert('Category created successfully!');
+                    }
+
+                    closeCategoryModal();
+                } catch (error) {
+                    console.error('Error saving category:', error);
+                    alert('Error saving category: ' + error.message);
+                }
+            };
+
+            const handleDeleteCategory = async (categoryId) => {
+                // Check if category has prompts
+                const promptsInCategory = prompts.filter(p => p.categoryId === categoryId || p.subcategoryId === categoryId);
+                
+                if (promptsInCategory.length > 0) {
+                    alert(`Cannot delete this category because it contains ${promptsInCategory.length} prompt(s). Please reassign or delete the prompts first.`);
+                    return;
+                }
+
+                // Check if category has subcategories
+                const subcategories = categories.filter(c => c.parentId === categoryId);
+                if (subcategories.length > 0) {
+                    alert(`Cannot delete this category because it has ${subcategories.length} subcategory(ies). Please delete the subcategories first.`);
+                    return;
+                }
+
+                if (!confirm('Are you sure you want to delete this category?')) {
+                    return;
+                }
+
+                try {
+                    await db.collection('categories').doc(categoryId).delete();
+                    alert('Category deleted successfully!');
+                } catch (error) {
+                    console.error('Error deleting category:', error);
+                    alert('Error deleting category: ' + error.message);
+                }
+            };
+
+            // Get main categories (no parent)
+            const getMainCategories = () => {
+                return categories.filter(c => !c.parentId);
+            };
+
+            // Get subcategories for a category
+            const getSubcategories = (parentId) => {
+                return categories.filter(c => c.parentId === parentId);
+            };
+
+            // Get prompts for a category or subcategory
+            const getPromptsForCategory = (categoryId, includeSubcategories = false) => {
+                if (includeSubcategories) {
+                    const subcategoryIds = getSubcategories(categoryId).map(s => s.id);
+                    return prompts.filter(p => 
+                        p.categoryId === categoryId || 
+                        subcategoryIds.includes(p.subcategoryId)
+                    );
+                }
+                return prompts.filter(p => p.categoryId === categoryId && !p.subcategoryId);
+            };
+
+            const getPromptsForSubcategory = (subcategoryId) => {
+                return prompts.filter(p => p.subcategoryId === subcategoryId);
+            };
+
+            const toggleCategory = (categoryId) => {
+                setExpandedCategories(prev => ({
+                    ...prev,
+                    [categoryId]: !prev[categoryId]
+                }));
+            };
+
+            const toggleSubcategory = (subcategoryId) => {
+                setExpandedSubcategories(prev => ({
+                    ...prev,
+                    [subcategoryId]: !prev[subcategoryId]
+                }));
+            };
+
             const openModal = (prompt = null) => {
                 if (prompt) {
                     setEditingPrompt(prompt);
                     setFormData({
                         name: prompt.name,
                         description: prompt.description,
-                        prompt: prompt.prompt
+                        prompt: prompt.prompt,
+                        categoryId: prompt.categoryId || '',
+                        subcategoryId: prompt.subcategoryId || ''
                     });
                 } else {
                     setEditingPrompt(null);
-                    setFormData({ name: '', description: '', prompt: '' });
+                    // Default to first category (likely Uncategorized)
+                    const defaultCategory = getMainCategories()[0];
+                    setFormData({
+                        name: '',
+                        description: '',
+                        prompt: '',
+                        categoryId: defaultCategory ? defaultCategory.id : '',
+                        subcategoryId: ''
+                    });
                 }
                 setIsModalOpen(true);
             };
@@ -210,48 +379,47 @@
             const closeModal = () => {
                 setIsModalOpen(false);
                 setEditingPrompt(null);
-                setFormData({ name: '', description: '', prompt: '' });
+                setFormData({
+                    name: '',
+                    description: '',
+                    prompt: '',
+                    categoryId: '',
+                    subcategoryId: ''
+                });
             };
 
-            const handleSave = async () => {
-                const trimmedName = formData.name?.trim() || '';
-                const trimmedDescription = formData.description?.trim() || '';
-                const trimmedPrompt = formData.prompt?.trim() || '';
-                
-                if (!trimmedName) {
-                    alert('Please enter a prompt name');
+            const handleSubmit = async () => {
+                if (!formData.name || !formData.prompt || !formData.categoryId) {
+                    alert('Please fill in all required fields (Name, Prompt, and Category)');
                     return;
                 }
-                if (!trimmedDescription) {
-                    alert('Please enter a short description');
-                    return;
-                }
-                if (!trimmedPrompt) {
-                    alert('Please enter the prompt text');
-                    return;
-                }
-                
-                const cleanedData = {
-                    name: trimmedName,
-                    description: trimmedDescription,
-                    prompt: trimmedPrompt
-                };
-                
+
                 try {
+                    const promptData = {
+                        name: formData.name,
+                        description: formData.description,
+                        prompt: formData.prompt,
+                        categoryId: formData.categoryId,
+                        subcategoryId: formData.subcategoryId || null,
+                        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                    };
+
                     if (editingPrompt) {
+                        const currentVersion = editingPrompt.version || 1;
                         await db.collection('prompts').doc(editingPrompt.id).update({
-                            ...cleanedData,
-                            version: editingPrompt.version + 1,
-                            updatedAt: new Date().toISOString()
+                            ...promptData,
+                            version: currentVersion + 1
                         });
+                        alert('Prompt updated successfully!');
                     } else {
                         await db.collection('prompts').add({
-                            ...cleanedData,
+                            ...promptData,
                             version: 1,
-                            createdAt: new Date().toISOString(),
-                            updatedAt: new Date().toISOString()
+                            createdAt: firebase.firestore.FieldValue.serverTimestamp()
                         });
+                        alert('Prompt created successfully!');
                     }
+
                     closeModal();
                 } catch (error) {
                     console.error('Error saving prompt:', error);
@@ -259,75 +427,53 @@
                 }
             };
 
-            const deletePrompt = async (id) => {
-                if (confirm('Are you sure you want to delete this prompt? This will also delete all attached files.')) {
-                    try {
-                        // Delete all files first
-                        const filesRef = storage.ref(`prompts/${id}`);
-                        const result = await filesRef.listAll();
-                        await Promise.all(result.items.map(item => item.delete()));
-                        
-                        // Then delete the prompt
-                        await db.collection('prompts').doc(id).delete();
-                    } catch (error) {
-                        console.error('Error deleting prompt:', error);
-                        alert('Error deleting prompt: ' + error.message);
-                    }
+            const handleDelete = async (id) => {
+                if (!confirm('Are you sure you want to delete this prompt and all its attached files?')) {
+                    return;
                 }
-            };
 
-            const copyToClipboard = async (text) => {
                 try {
-                    await navigator.clipboard.writeText(text);
-                    alert('Prompt copied to clipboard!');
-                } catch (err) {
-                    alert('Failed to copy to clipboard');
+                    // Delete all files associated with this prompt
+                    const filesRef = storage.ref(`prompts/${id}`);
+                    const result = await filesRef.listAll();
+                    await Promise.all(result.items.map(item => item.delete()));
+                    
+                    // Delete the prompt document
+                    await db.collection('prompts').doc(id).delete();
+                    alert('Prompt deleted successfully!');
+                } catch (error) {
+                    console.error('Error deleting prompt:', error);
+                    alert('Error deleting prompt: ' + error.message);
                 }
             };
 
-            const runPrompt = (prompt) => {
+            const handleCopy = (text) => {
+                navigator.clipboard.writeText(text);
+                alert('Prompt copied to clipboard!');
+            };
+
+            const handleRunPrompt = (prompt) => {
+                handleCopy(prompt.prompt);
                 setPendingPrompt(prompt);
                 setShowAccessModal(true);
             };
 
-            const executePromptOpen = (useIncognito) => {
-                if (!pendingPrompt) return;
-                
-                setRunningPromptId(pendingPrompt.id);
-                copyToClipboard(pendingPrompt.prompt);
-                
+            const executePromptOpen = (isPrivate) => {
                 const model = aiModels.find(m => m.id === selectedModel);
-                
-                const files = promptFiles[pendingPrompt.id] || [];
-                const fileMessage = files.length > 0 
-                    ? `\n\nAttached files (${files.length}):\n${files.map(f => `• ${f.name} (${formatFileSize(f.size)})`).join('\n')}\n\nDownload these files first, then upload them to the AI along with your prompt!`
-                    : '';
-                
-                if (useIncognito) {
-                    alert('Opening in a new tab. To use incognito/private mode:\n\n' +
-                        '• Desktop: Right-click the link and select "Open in Incognito/Private Window"\n' +
-                        '• Mobile: Long-press the tab switcher and select "New Incognito Tab", then paste the URL\n\n' +
-                        'Your prompt has been copied - paste it when ready!' + fileMessage);
-                } else if (files.length > 0) {
-                    alert('Your prompt has been copied!' + fileMessage);
+                if (model) {
+                    let url = model.url;
+                    
+                    if (selectedModel === 'claude' && isPrivate) {
+                        url = 'https://claude.ai/new?mode=private';
+                    } else if (selectedModel === 'chatgpt' && isPrivate) {
+                        url = 'https://chatgpt.com/?temporary-chat=true';
+                    }
+                    
+                    window.open(url, '_blank');
                 }
                 
-                setTimeout(() => {
-                    window.open(model.url, '_blank');
-                    setRunningPromptId(null);
-                    setShowAccessModal(false);
-                    setPendingPrompt(null);
-                }, 500);
-            };
-
-            const formatDate = (dateString) => {
-                return new Date(dateString).toLocaleDateString('en-US', {
-                    year: 'numeric',
-                    month: 'short',
-                    day: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit'
-                });
+                setShowAccessModal(false);
+                setPendingPrompt(null);
             };
 
             const openModelModal = () => {
@@ -342,7 +488,7 @@
 
             const handleAddModel = async () => {
                 if (!modelFormData.name || !modelFormData.url) {
-                    alert('Please fill in both model name and URL');
+                    alert('Please fill in both name and URL');
                     return;
                 }
 
@@ -350,262 +496,482 @@
                     await db.collection('customModels').add({
                         name: modelFormData.name,
                         url: modelFormData.url,
-                        isDefault: false
+                        createdAt: firebase.firestore.FieldValue.serverTimestamp()
                     });
+                    alert('Custom model added successfully!');
                     closeModelModal();
                 } catch (error) {
-                    console.error('Error adding model:', error);
-                    alert('Error adding model: ' + error.message);
+                    console.error('Error adding custom model:', error);
+                    alert('Error adding custom model: ' + error.message);
                 }
             };
 
-            const deleteModel = async (id) => {
-                if (confirm('Are you sure you want to delete this AI model?')) {
-                    try {
-                        await db.collection('customModels').doc(id).delete();
-                        if (selectedModel === id) {
-                            setSelectedModel('claude');
-                        }
-                    } catch (error) {
-                        console.error('Error deleting model:', error);
-                        alert('Error deleting model: ' + error.message);
-                    }
+            const handleDeleteModel = async (modelId) => {
+                if (!confirm('Are you sure you want to delete this custom model?')) {
+                    return;
+                }
+
+                try {
+                    await db.collection('customModels').doc(modelId).delete();
+                    alert('Custom model deleted successfully!');
+                } catch (error) {
+                    console.error('Error deleting custom model:', error);
+                    alert('Error deleting custom model: ' + error.message);
                 }
             };
 
-            const togglePromptExpanded = (id) => {
-                setExpandedPrompts(prev => ({
-                    ...prev,
-                    [id]: !prev[id]
-                }));
+            // Get available parent categories (excluding current category and its descendants when editing)
+            const getAvailableParentCategories = () => {
+                if (!editingCategory) {
+                    return getMainCategories();
+                }
+
+                // Exclude the category being edited and its subcategories
+                const excludedIds = [editingCategory.id, ...getSubcategories(editingCategory.id).map(s => s.id)];
+                return getMainCategories().filter(c => !excludedIds.includes(c.id));
+            };
+
+            // Get available subcategories for selected category in prompt form
+            const getAvailableSubcategories = () => {
+                if (!formData.categoryId) return [];
+                return getSubcategories(formData.categoryId);
             };
 
             if (loading) {
                 return (
                     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
-                        <div className="text-xl text-gray-700">Loading your prompts...</div>
+                        <div className="text-xl text-gray-600">Loading prompts...</div>
                     </div>
                 );
             }
 
             return (
-                <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-3 md:p-6">
+                <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 py-4 md:py-8 px-3 md:px-4">
                     <div className="max-w-6xl mx-auto">
-                        <div className="bg-white rounded-lg shadow-lg p-4 md:p-8 mb-4 md:mb-6">
+                        <div className="bg-white rounded-lg shadow-xl p-4 md:p-8">
                             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
-                                <div className="flex-1">
+                                <div>
                                     <h1 className="text-2xl md:text-3xl font-bold text-gray-800 mb-2">Prompt Repository</h1>
-                                    <p className="text-sm md:text-base text-gray-600">Manage and version your custom AI prompts</p>
+                                    <p className="text-sm md:text-base text-gray-600">Manage and organize your AI prompts</p>
                                 </div>
                                 <div className="flex gap-2 w-full sm:w-auto">
                                     <button
                                         onClick={() => setIsFaqOpen(true)}
-                                        className="flex-1 sm:flex-initial bg-gray-600 hover:bg-gray-700 text-white px-4 py-3 md:py-2 rounded-lg flex items-center justify-center gap-2 transition-colors touch-manipulation font-medium"
+                                        className="flex-1 sm:flex-none px-4 py-3 md:py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors flex items-center justify-center gap-2 touch-manipulation font-medium"
                                     >
-                                        <HelpIcon />
-                                        <span className="sm:inline">Help</span>
+                                        <HelpIcon /> Help
+                                    </button>
+                                    <button
+                                        onClick={() => openCategoryModal()}
+                                        className="flex-1 sm:flex-none px-4 py-3 md:py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors flex items-center justify-center gap-2 touch-manipulation font-medium"
+                                    >
+                                        <FolderIcon /> Categories
                                     </button>
                                     <button
                                         onClick={() => openModal()}
-                                        className="flex-1 sm:flex-initial bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-3 md:py-2 rounded-lg flex items-center justify-center gap-2 transition-colors touch-manipulation font-medium"
+                                        className="flex-1 sm:flex-none px-4 py-3 md:py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors flex items-center justify-center gap-2 touch-manipulation font-medium"
                                     >
-                                        <PlusIcon />
-                                        New Prompt
+                                        <PlusIcon /> New Prompt
                                     </button>
                                 </div>
                             </div>
 
-                            <div className="mb-6 p-3 md:p-4 bg-gray-50 rounded-lg border border-gray-200">
-                                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-3">
-                                    <h3 className="text-base md:text-lg font-semibold text-gray-800">AI Models</h3>
+                            {prompts.length === 0 ? (
+                                <div className="text-center py-12">
+                                    <p className="text-gray-500 mb-4">No prompts yet. Create your first prompt!</p>
                                     <button
-                                        onClick={openModelModal}
-                                        className="w-full sm:w-auto bg-green-600 hover:bg-green-700 text-white px-3 py-2 rounded text-sm font-medium flex items-center justify-center gap-2 transition-colors touch-manipulation"
+                                        onClick={() => openModal()}
+                                        className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors touch-manipulation font-medium"
                                     >
-                                        <PlusIcon />
-                                        Add Model
+                                        <PlusIcon /> Create First Prompt
                                     </button>
                                 </div>
-                                <div className="flex flex-wrap gap-2">
-                                    {aiModels.map(model => (
-                                        <div key={model.id} className="bg-white px-3 py-2 rounded border border-gray-300 flex items-center gap-2">
-                                            <span className="text-sm font-medium text-gray-700">{model.name}</span>
-                                            {!model.isDefault && (
-                                                <button
-                                                    onClick={() => deleteModel(model.id)}
-                                                    className="text-red-500 hover:text-red-700 touch-manipulation p-1"
-                                                    title="Delete model"
-                                                >
-                                                    <XIcon />
-                                                </button>
-                                            )}
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
+                            ) : (
+                                <div className="space-y-3">
+                                    {getMainCategories().map(category => {
+                                        const categoryPrompts = getPromptsForCategory(category.id, false);
+                                        const subcategories = getSubcategories(category.id);
+                                        const totalPromptsInCategory = categoryPrompts.length + 
+                                            subcategories.reduce((sum, sub) => sum + getPromptsForSubcategory(sub.id).length, 0);
 
-                            <div className="grid gap-4">
-                                {prompts.sort((a, b) => a.name.localeCompare(b.name)).map(prompt => {
-                                    const isExpanded = expandedPrompts[prompt.id];
-                                    const files = promptFiles[prompt.id] || [];
-                                    const isUploading = uploadingFiles[prompt.id];
-                                    
-                                    return (
-                                        <div key={prompt.id} className="border border-gray-200 rounded-lg p-4 md:p-6 hover:shadow-md transition-shadow">
-                                            <div className="flex justify-between items-start mb-3">
-                                                <div className="flex-1 min-w-0 pr-2">
-                                                    <div className="flex items-center gap-2 mb-2 flex-wrap">
-                                                        <h3 className="text-lg md:text-xl font-semibold text-gray-800 break-words">{prompt.name}</h3>
-                                                        <span className="bg-indigo-100 text-indigo-800 text-xs px-2 py-1 rounded whitespace-nowrap">
-                                                            v{prompt.version}
-                                                        </span>
-                                                        {files.length > 0 && (
-                                                            <span className="bg-green-100 text-green-800 text-xs px-2 py-1 rounded whitespace-nowrap flex items-center gap-1">
-                                                                <PaperclipIcon /> {files.length}
+                                        return (
+                                            <div key={category.id} className="border border-gray-200 rounded-lg overflow-hidden">
+                                                {/* Category Header */}
+                                                <div 
+                                                    className="bg-gradient-to-r from-indigo-50 to-purple-50 p-4 cursor-pointer hover:from-indigo-100 hover:to-purple-100 transition-colors"
+                                                    onClick={() => toggleCategory(category.id)}
+                                                >
+                                                    <div className="flex items-center justify-between">
+                                                        <div className="flex items-center gap-3">
+                                                            <span className="text-xl">
+                                                                {expandedCategories[category.id] ? <ChevronDownIcon /> : <ChevronRightIcon />}
                                                             </span>
-                                                        )}
-                                                    </div>
-                                                    <p className="text-sm md:text-base text-gray-600 mb-2 break-words">{prompt.description}</p>
-                                                    <div className="text-xs md:text-sm text-gray-500">
-                                                        <span>Updated: {formatDate(prompt.updatedAt)}</span>
+                                                            <FolderIcon />
+                                                            <h3 className="text-lg font-semibold text-gray-800">
+                                                                {category.name}
+                                                            </h3>
+                                                            <span className="text-sm text-gray-600 bg-white px-2 py-1 rounded-full">
+                                                                {totalPromptsInCategory}
+                                                            </span>
+                                                        </div>
+                                                        <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
+                                                            <button
+                                                                onClick={() => openCategoryModal(category)}
+                                                                className="p-2 hover:bg-white rounded transition-colors touch-manipulation"
+                                                                title="Edit category"
+                                                            >
+                                                                <EditIcon />
+                                                            </button>
+                                                            <button
+                                                                onClick={() => handleDeleteCategory(category.id)}
+                                                                className="p-2 hover:bg-white rounded transition-colors touch-manipulation"
+                                                                title="Delete category"
+                                                            >
+                                                                <TrashIcon />
+                                                            </button>
+                                                        </div>
                                                     </div>
                                                 </div>
-                                                
-                                                <div className="flex gap-1 md:gap-2 flex-shrink-0">
+
+                                                {/* Category Content */}
+                                                {expandedCategories[category.id] && (
+                                                    <div className="p-4 bg-white">
+                                                        {/* Prompts directly in category */}
+                                                        {categoryPrompts.length > 0 && (
+                                                            <div className="space-y-3 mb-4">
+                                                                {categoryPrompts.map(prompt => (
+                                                                    <div key={prompt.id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+                                                                        <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
+                                                                            <div className="flex-1 min-w-0">
+                                                                                <div className="flex items-center gap-2 mb-2">
+                                                                                    <h3 className="text-lg font-semibold text-gray-800 truncate">{prompt.name}</h3>
+                                                                                    <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded whitespace-nowrap">
+                                                                                        v{prompt.version || 1}
+                                                                                    </span>
+                                                                                </div>
+                                                                                {prompt.description && (
+                                                                                    <p className="text-sm text-gray-600 mb-3">{prompt.description}</p>
+                                                                                )}
+
+                                                                                {/* Attached Files Section */}
+                                                                                {promptFiles[prompt.id] && promptFiles[prompt.id].length > 0 && (
+                                                                                    <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                                                                                        <div className="flex items-center gap-2 mb-2">
+                                                                                            <PaperclipIcon />
+                                                                                            <span className="text-sm font-semibold text-gray-700">
+                                                                                                Attached Files ({promptFiles[prompt.id].length})
+                                                                                            </span>
+                                                                                        </div>
+                                                                                        <div className="space-y-2">
+                                                                                            {promptFiles[prompt.id].map((file, idx) => (
+                                                                                                <div key={idx} className="flex items-center justify-between text-sm bg-white p-2 rounded">
+                                                                                                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                                                                                                        <span className="truncate">{file.name}</span>
+                                                                                                        <span className="text-xs text-gray-500 whitespace-nowrap">
+                                                                                                            ({formatFileSize(file.size)})
+                                                                                                        </span>
+                                                                                                    </div>
+                                                                                                    <div className="flex gap-2 ml-2">
+                                                                                                        <a
+                                                                                                            href={file.url}
+                                                                                                            download
+                                                                                                            className="p-1 hover:bg-gray-100 rounded transition-colors touch-manipulation"
+                                                                                                            title="Download file"
+                                                                                                        >
+                                                                                                            <DownloadIcon />
+                                                                                                        </a>
+                                                                                                        <button
+                                                                                                            onClick={() => handleDeleteFile(prompt.id, file.name)}
+                                                                                                            className="p-1 hover:bg-gray-100 rounded transition-colors touch-manipulation"
+                                                                                                            title="Delete file"
+                                                                                                        >
+                                                                                                            <TrashIcon />
+                                                                                                        </button>
+                                                                                                    </div>
+                                                                                                </div>
+                                                                                            ))}
+                                                                                        </div>
+                                                                                    </div>
+                                                                                )}
+
+                                                                                <div className="flex flex-wrap gap-2">
+                                                                                    <button
+                                                                                        onClick={() => handleCopy(prompt.prompt)}
+                                                                                        className="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded transition-colors text-sm touch-manipulation flex items-center gap-1"
+                                                                                    >
+                                                                                        <CopyIcon /> Copy
+                                                                                    </button>
+                                                                                    <button
+                                                                                        onClick={() => handleRunPrompt(prompt)}
+                                                                                        className="px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded transition-colors text-sm touch-manipulation flex items-center gap-1"
+                                                                                    >
+                                                                                        <ExternalLinkIcon /> Open AI
+                                                                                    </button>
+                                                                                    <button
+                                                                                        onClick={() => openModal(prompt)}
+                                                                                        className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors text-sm touch-manipulation flex items-center gap-1"
+                                                                                    >
+                                                                                        <EditIcon /> Edit
+                                                                                    </button>
+                                                                                    <button
+                                                                                        onClick={() => handleDelete(prompt.id)}
+                                                                                        className="px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded transition-colors text-sm touch-manipulation flex items-center gap-1"
+                                                                                    >
+                                                                                        <TrashIcon /> Delete
+                                                                                    </button>
+                                                                                </div>
+                                                                            </div>
+
+                                                                            <div className="w-full md:w-48 flex-shrink-0">
+                                                                                <label className="block text-xs font-medium text-gray-700 mb-1">Run with:</label>
+                                                                                <select
+                                                                                    value={selectedModel}
+                                                                                    onChange={(e) => setSelectedModel(e.target.value)}
+                                                                                    className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 touch-manipulation"
+                                                                                >
+                                                                                    {aiModels.map(model => (
+                                                                                        <option key={model.id} value={model.id}>
+                                                                                            {model.name}
+                                                                                        </option>
+                                                                                    ))}
+                                                                                </select>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        )}
+
+                                                        {/* Subcategories */}
+                                                        {subcategories.map(subcategory => {
+                                                            const subPrompts = getPromptsForSubcategory(subcategory.id);
+                                                            
+                                                            return (
+                                                                <div key={subcategory.id} className="mb-3 border border-gray-200 rounded-lg overflow-hidden">
+                                                                    <div
+                                                                        className="bg-gradient-to-r from-blue-50 to-cyan-50 p-3 cursor-pointer hover:from-blue-100 hover:to-cyan-100 transition-colors"
+                                                                        onClick={() => toggleSubcategory(subcategory.id)}
+                                                                    >
+                                                                        <div className="flex items-center justify-between">
+                                                                            <div className="flex items-center gap-3 pl-4">
+                                                                                <span className="text-sm">
+                                                                                    {expandedSubcategories[subcategory.id] ? <ChevronDownIcon /> : <ChevronRightIcon />}
+                                                                                </span>
+                                                                                <FolderIcon />
+                                                                                <h4 className="text-base font-semibold text-gray-800">
+                                                                                    {subcategory.name}
+                                                                                </h4>
+                                                                                <span className="text-xs text-gray-600 bg-white px-2 py-1 rounded-full">
+                                                                                    {subPrompts.length}
+                                                                                </span>
+                                                                            </div>
+                                                                            <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
+                                                                                <button
+                                                                                    onClick={() => openCategoryModal(subcategory)}
+                                                                                    className="p-1 hover:bg-white rounded transition-colors touch-manipulation"
+                                                                                    title="Edit subcategory"
+                                                                                >
+                                                                                    <EditIcon />
+                                                                                </button>
+                                                                                <button
+                                                                                    onClick={() => handleDeleteCategory(subcategory.id)}
+                                                                                    className="p-1 hover:bg-white rounded transition-colors touch-manipulation"
+                                                                                    title="Delete subcategory"
+                                                                                >
+                                                                                    <TrashIcon />
+                                                                                </button>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+
+                                                                    {expandedSubcategories[subcategory.id] && (
+                                                                        <div className="p-3 bg-white space-y-3">
+                                                                            {subPrompts.map(prompt => (
+                                                                                <div key={prompt.id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+                                                                                    <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
+                                                                                        <div className="flex-1 min-w-0">
+                                                                                            <div className="flex items-center gap-2 mb-2">
+                                                                                                <h3 className="text-lg font-semibold text-gray-800 truncate">{prompt.name}</h3>
+                                                                                                <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded whitespace-nowrap">
+                                                                                                    v{prompt.version || 1}
+                                                                                                </span>
+                                                                                            </div>
+                                                                                            {prompt.description && (
+                                                                                                <p className="text-sm text-gray-600 mb-3">{prompt.description}</p>
+                                                                                            )}
+
+                                                                                            {/* Attached Files Section */}
+                                                                                            {promptFiles[prompt.id] && promptFiles[prompt.id].length > 0 && (
+                                                                                                <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                                                                                                    <div className="flex items-center gap-2 mb-2">
+                                                                                                        <PaperclipIcon />
+                                                                                                        <span className="text-sm font-semibold text-gray-700">
+                                                                                                            Attached Files ({promptFiles[prompt.id].length})
+                                                                                                        </span>
+                                                                                                    </div>
+                                                                                                    <div className="space-y-2">
+                                                                                                        {promptFiles[prompt.id].map((file, idx) => (
+                                                                                                            <div key={idx} className="flex items-center justify-between text-sm bg-white p-2 rounded">
+                                                                                                                <div className="flex items-center gap-2 flex-1 min-w-0">
+                                                                                                                    <span className="truncate">{file.name}</span>
+                                                                                                                    <span className="text-xs text-gray-500 whitespace-nowrap">
+                                                                                                                        ({formatFileSize(file.size)})
+                                                                                                                    </span>
+                                                                                                                </div>
+                                                                                                                <div className="flex gap-2 ml-2">
+                                                                                                                    <a
+                                                                                                                        href={file.url}
+                                                                                                                        download
+                                                                                                                        className="p-1 hover:bg-gray-100 rounded transition-colors touch-manipulation"
+                                                                                                                        title="Download file"
+                                                                                                                    >
+                                                                                                                        <DownloadIcon />
+                                                                                                                    </a>
+                                                                                                                    <button
+                                                                                                                        onClick={() => handleDeleteFile(prompt.id, file.name)}
+                                                                                                                        className="p-1 hover:bg-gray-100 rounded transition-colors touch-manipulation"
+                                                                                                                        title="Delete file"
+                                                                                                                    >
+                                                                                                                        <TrashIcon />
+                                                                                                                    </button>
+                                                                                                                </div>
+                                                                                                            </div>
+                                                                                                        ))}
+                                                                                                    </div>
+                                                                                                </div>
+                                                                                            )}
+
+                                                                                            <div className="flex flex-wrap gap-2">
+                                                                                                <button
+                                                                                                    onClick={() => handleCopy(prompt.prompt)}
+                                                                                                    className="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded transition-colors text-sm touch-manipulation flex items-center gap-1"
+                                                                                                >
+                                                                                                    <CopyIcon /> Copy
+                                                                                                </button>
+                                                                                                <button
+                                                                                                    onClick={() => handleRunPrompt(prompt)}
+                                                                                                    className="px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded transition-colors text-sm touch-manipulation flex items-center gap-1"
+                                                                                                >
+                                                                                                    <ExternalLinkIcon /> Open AI
+                                                                                                </button>
+                                                                                                <button
+                                                                                                    onClick={() => openModal(prompt)}
+                                                                                                    className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors text-sm touch-manipulation flex items-center gap-1"
+                                                                                                >
+                                                                                                    <EditIcon /> Edit
+                                                                                                </button>
+                                                                                                <button
+                                                                                                    onClick={() => handleDelete(prompt.id)}
+                                                                                                    className="px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded transition-colors text-sm touch-manipulation flex items-center gap-1"
+                                                                                                >
+                                                                                                    <TrashIcon /> Delete
+                                                                                                </button>
+                                                                                            </div>
+                                                                                        </div>
+
+                                                                                        <div className="w-full md:w-48 flex-shrink-0">
+                                                                                            <label className="block text-xs font-medium text-gray-700 mb-1">Run with:</label>
+                                                                                            <select
+                                                                                                value={selectedModel}
+                                                                                                onChange={(e) => setSelectedModel(e.target.value)}
+                                                                                                className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 touch-manipulation"
+                                                                                            >
+                                                                                                {aiModels.map(model => (
+                                                                                                    <option key={model.id} value={model.id}>
+                                                                                                        {model.name}
+                                                                                                    </option>
+                                                                                                ))}
+                                                                                            </select>
+                                                                                        </div>
+                                                                                    </div>
+                                                                                </div>
+                                                                            ))}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            );
+                                                        })}
+
+                                                        {categoryPrompts.length === 0 && subcategories.length === 0 && (
+                                                            <p className="text-gray-500 text-center py-4">No prompts in this category yet</p>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="mt-6 bg-white rounded-lg shadow-xl p-4 md:p-6">
+                            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
+                                <h2 className="text-xl font-bold text-gray-800">AI Model Settings</h2>
+                                <button
+                                    onClick={openModelModal}
+                                    className="w-full sm:w-auto px-4 py-3 md:py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors flex items-center justify-center gap-2 touch-manipulation font-medium"
+                                >
+                                    <PlusIcon /> Add Custom Model
+                                </button>
+                            </div>
+
+                            <div className="space-y-3">
+                                <div>
+                                    <h3 className="text-sm font-semibold text-gray-700 mb-2">Default Models</h3>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                        {defaultModels.map(model => (
+                                            <div key={model.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200">
+                                                <span className="font-medium text-gray-800">{model.name}</span>
+                                                <a
+                                                    href={model.url}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className="text-blue-600 hover:text-blue-700 text-sm underline"
+                                                >
+                                                    Visit
+                                                </a>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {customModels.length > 0 && (
+                                    <div>
+                                        <h3 className="text-sm font-semibold text-gray-700 mb-2">Custom Models</h3>
+                                        <div className="space-y-2">
+                                            {customModels.map(model => (
+                                                <div key={model.id} className="flex items-center justify-between p-3 bg-purple-50 rounded-lg border border-purple-200">
+                                                    <div className="flex-1">
+                                                        <span className="font-medium text-gray-800">{model.name}</span>
+                                                        <a
+                                                            href={model.url}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            className="text-blue-600 hover:text-blue-700 text-sm underline ml-3"
+                                                        >
+                                                            Visit
+                                                        </a>
+                                                    </div>
                                                     <button
-                                                        onClick={() => copyToClipboard(prompt.prompt)}
-                                                        className="p-2 text-gray-600 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors touch-manipulation"
-                                                        title="Copy prompt"
-                                                    >
-                                                        <CopyIcon />
-                                                    </button>
-                                                    <button
-                                                        onClick={() => openModal(prompt)}
-                                                        className="p-2 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors touch-manipulation"
-                                                        title="Edit prompt"
-                                                    >
-                                                        <EditIcon />
-                                                    </button>
-                                                    <button
-                                                        onClick={() => deletePrompt(prompt.id)}
-                                                        className="p-2 text-gray-600 hover:text-red-600 hover:bg-red-50 rounded transition-colors touch-manipulation"
-                                                        title="Delete prompt"
+                                                        onClick={() => handleDeleteModel(model.id)}
+                                                        className="p-2 hover:bg-purple-100 rounded transition-colors touch-manipulation"
+                                                        title="Delete custom model"
                                                     >
                                                         <TrashIcon />
                                                     </button>
                                                 </div>
-                                            </div>
-
-                                            {/* File Upload Section */}
-                                            <div className="mb-4 p-3 bg-gray-50 rounded border border-gray-200">
-                                                <div className="flex items-center justify-between mb-2">
-                                                    <label className="text-sm font-medium text-gray-700 flex items-center gap-2">
-                                                        <PaperclipIcon /> Attached Documents
-                                                    </label>
-                                                    <label className="cursor-pointer bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded text-xs font-medium flex items-center gap-1 transition-colors">
-                                                        <UploadIcon /> Upload
-                                                        <input
-                                                            type="file"
-                                                            multiple
-                                                            onChange={(e) => handleFileUpload(prompt.id, e.target.files)}
-                                                            className="hidden"
-                                                            disabled={isUploading}
-                                                        />
-                                                    </label>
-                                                </div>
-                                                
-                                                {isUploading && (
-                                                    <div className="text-sm text-blue-600 mb-2">Uploading files...</div>
-                                                )}
-                                                
-                                                {files.length > 0 ? (
-                                                    <div className="space-y-1">
-                                                        {files.map((file, idx) => (
-                                                            <div key={idx} className="flex items-center justify-between bg-white p-2 rounded text-sm">
-                                                                <span className="flex-1 truncate text-gray-700">{file.name}</span>
-                                                                <span className="text-xs text-gray-500 mx-2">{formatFileSize(file.size)}</span>
-                                                                <div className="flex gap-1">
-                                                                    <a
-                                                                        href={file.url}
-                                                                        download={file.name}
-                                                                        className="p-1 text-green-600 hover:text-green-700"
-                                                                        title="Download"
-                                                                    >
-                                                                        <DownloadIcon />
-                                                                    </a>
-                                                                    <button
-                                                                        onClick={() => deleteFile(prompt.id, file.name)}
-                                                                        className="p-1 text-red-500 hover:text-red-700"
-                                                                        title="Delete"
-                                                                    >
-                                                                        <TrashIcon />
-                                                                    </button>
-                                                                </div>
-                                                            </div>
-                                                        ))}
-                                                    </div>
-                                                ) : (
-                                                    <div className="text-sm text-gray-500 text-center py-2">
-                                                        No files attached. Upload documents to reference with this prompt.
-                                                    </div>
-                                                )}
-                                            </div>
-
-                                            <button
-                                                onClick={() => togglePromptExpanded(prompt.id)}
-                                                className="w-full bg-gray-50 rounded p-3 mb-4 border border-gray-200 text-left flex justify-between items-center touch-manipulation hover:bg-gray-100 transition-colors"
-                                            >
-                                                <span className="text-sm font-medium text-gray-700">
-                                                    {isExpanded ? 'Hide Prompt' : 'Show Prompt'}
-                                                </span>
-                                                {isExpanded ? <ChevronUpIcon /> : <ChevronDownIcon />}
-                                            </button>
-
-                                            {isExpanded && (
-                                                <div className="bg-gray-50 rounded p-3 md:p-4 mb-4 border border-gray-200 max-h-64 overflow-y-auto">
-                                                    <pre className="text-xs md:text-sm text-gray-700 whitespace-pre-wrap font-mono break-words">
-                                                        {prompt.prompt}
-                                                    </pre>
-                                                </div>
-                                            )}
-
-                                            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-                                                <label className="text-sm font-medium text-gray-700 sm:whitespace-nowrap">Run with:</label>
-                                                <select
-                                                    value={selectedModel}
-                                                    onChange={(e) => setSelectedModel(e.target.value)}
-                                                    className="flex-1 sm:flex-initial border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 touch-manipulation"
-                                                >
-                                                    {aiModels.map(model => (
-                                                        <option key={model.id} value={model.id}>{model.name}</option>
-                                                    ))}
-                                                </select>
-                                                <button
-                                                    onClick={() => runPrompt(prompt)}
-                                                    disabled={runningPromptId === prompt.id}
-                                                    className="w-full sm:w-auto bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white px-4 py-2 rounded text-sm font-medium flex items-center justify-center gap-2 transition-colors touch-manipulation"
-                                                >
-                                                    <ExternalLinkIcon />
-                                                    {runningPromptId === prompt.id ? 'Opening...' : 'Open AI'}
-                                                </button>
-                                            </div>
+                                            ))}
                                         </div>
-                                    );
-                                })}
-
-                                {prompts.length === 0 && (
-                                    <div className="text-center py-12 text-gray-500">
-                                        <p className="text-lg mb-2">No prompts yet</p>
-                                        <p>Click "New Prompt" to create your first prompt</p>
                                     </div>
                                 )}
                             </div>
                         </div>
                     </div>
 
+                    {/* Prompt Modal */}
                     {isModalOpen && (
-                        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 md:p-4 z-50">
-                            <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+                        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 md:p-4 z-50 overflow-y-auto">
+                            <div className="bg-white rounded-lg shadow-xl max-w-3xl w-full my-8 max-h-[90vh] overflow-y-auto">
                                 <div className="flex justify-between items-center p-4 md:p-6 border-b sticky top-0 bg-white z-10">
                                     <h2 className="text-xl md:text-2xl font-bold text-gray-800">
                                         {editingPrompt ? 'Edit Prompt' : 'New Prompt'}
@@ -618,55 +984,141 @@
                                     </button>
                                 </div>
 
-                                <div className="p-4 md:p-6">
-                                    <div className="mb-4">
+                                <div className="p-4 md:p-6 space-y-6">
+                                    <div>
                                         <label className="block text-sm font-medium text-gray-700 mb-2">
-                                            Prompt Name *
+                                            Name *
                                         </label>
                                         <input
                                             type="text"
                                             value={formData.name}
                                             onChange={(e) => setFormData({...formData, name: e.target.value})}
-                                            className="w-full border border-gray-300 rounded-lg px-4 py-3 md:py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-base"
-                                            placeholder="e.g., Code Reviewer"
+                                            className="w-full border border-gray-300 rounded-lg px-4 py-3 md:py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-base"
+                                            placeholder="Enter prompt name"
                                         />
                                     </div>
 
-                                    <div className="mb-4">
+                                    <div>
                                         <label className="block text-sm font-medium text-gray-700 mb-2">
-                                            Short Description *
+                                            Description
                                         </label>
                                         <input
                                             type="text"
                                             value={formData.description}
                                             onChange={(e) => setFormData({...formData, description: e.target.value})}
-                                            className="w-full border border-gray-300 rounded-lg px-4 py-3 md:py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-base"
-                                            placeholder="Brief description of what this prompt does"
+                                            className="w-full border border-gray-300 rounded-lg px-4 py-3 md:py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-base"
+                                            placeholder="Brief description (optional)"
                                         />
                                     </div>
 
-                                    <div className="mb-6">
+                                    <div>
                                         <label className="block text-sm font-medium text-gray-700 mb-2">
-                                            Prompt Text *
+                                            Category *
+                                        </label>
+                                        <select
+                                            value={formData.categoryId}
+                                            onChange={(e) => setFormData({...formData, categoryId: e.target.value, subcategoryId: ''})}
+                                            className="w-full border border-gray-300 rounded-lg px-4 py-3 md:py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-base"
+                                        >
+                                            <option value="">Select a category</option>
+                                            {getMainCategories().map(cat => (
+                                                <option key={cat.id} value={cat.id}>{cat.name}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    {formData.categoryId && getAvailableSubcategories().length > 0 && (
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                                                Subcategory (Optional)
+                                            </label>
+                                            <select
+                                                value={formData.subcategoryId}
+                                                onChange={(e) => setFormData({...formData, subcategoryId: e.target.value})}
+                                                className="w-full border border-gray-300 rounded-lg px-4 py-3 md:py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-base"
+                                            >
+                                                <option value="">None (place in main category)</option>
+                                                {getAvailableSubcategories().map(sub => (
+                                                    <option key={sub.id} value={sub.id}>{sub.name}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    )}
+
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                                            Prompt *
                                         </label>
                                         <textarea
                                             value={formData.prompt}
                                             onChange={(e) => setFormData({...formData, prompt: e.target.value})}
-                                            rows={10}
-                                            className="w-full border border-gray-300 rounded-lg px-4 py-3 md:py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono text-sm"
-                                            placeholder="Enter your prompt here..."
+                                            className="w-full border border-gray-300 rounded-lg px-4 py-3 md:py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 min-h-[200px] text-base"
+                                            placeholder="Enter your prompt text here"
                                         />
                                     </div>
 
                                     {editingPrompt && (
-                                        <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                                            <p className="text-sm text-blue-800">
-                                                Updating this prompt will increment its version from v{editingPrompt.version} to v{editingPrompt.version + 1}
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                                                <PaperclipIcon /> Attached Documents
+                                            </label>
+                                            
+                                            {promptFiles[editingPrompt.id] && promptFiles[editingPrompt.id].length > 0 && (
+                                                <div className="mb-3 space-y-2">
+                                                    {promptFiles[editingPrompt.id].map((file, idx) => (
+                                                        <div key={idx} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200">
+                                                            <div className="flex items-center gap-2 flex-1 min-w-0">
+                                                                <span className="truncate">{file.name}</span>
+                                                                <span className="text-xs text-gray-500 whitespace-nowrap">
+                                                                    ({formatFileSize(file.size)})
+                                                                </span>
+                                                            </div>
+                                                            <div className="flex gap-2 ml-2">
+                                                                <a
+                                                                    href={file.url}
+                                                                    download
+                                                                    className="p-2 hover:bg-gray-200 rounded transition-colors touch-manipulation"
+                                                                    title="Download file"
+                                                                >
+                                                                    <DownloadIcon />
+                                                                </a>
+                                                                <button
+                                                                    onClick={() => handleDeleteFile(editingPrompt.id, file.name)}
+                                                                    className="p-2 hover:bg-gray-200 rounded transition-colors touch-manipulation"
+                                                                    title="Delete file"
+                                                                >
+                                                                    <TrashIcon />
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            <div className="flex items-center gap-3">
+                                                <label className="flex-1 cursor-pointer">
+                                                    <div className="border-2 border-dashed border-gray-300 rounded-lg p-4 hover:border-blue-400 hover:bg-blue-50 transition-colors text-center">
+                                                        <UploadIcon />
+                                                        <span className="text-sm text-gray-600 ml-2">
+                                                            {uploadingFiles[editingPrompt.id] ? 'Uploading...' : 'Click to upload files (max 10 MB each)'}
+                                                        </span>
+                                                    </div>
+                                                    <input
+                                                        type="file"
+                                                        multiple
+                                                        onChange={(e) => handleFileUpload(editingPrompt.id, Array.from(e.target.files))}
+                                                        className="hidden"
+                                                        disabled={uploadingFiles[editingPrompt.id]}
+                                                    />
+                                                </label>
+                                            </div>
+                                            <p className="text-xs text-gray-500 mt-2">
+                                                Upload reference documents, templates, or any files you want to keep with this prompt
                                             </p>
                                         </div>
                                     )}
 
-                                    <div className="flex flex-col sm:flex-row gap-3 justify-end">
+                                    <div className="flex flex-col sm:flex-row gap-3 justify-end pt-4 border-t">
                                         <button
                                             onClick={closeModal}
                                             className="w-full sm:w-auto px-6 py-3 md:py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors touch-manipulation font-medium"
@@ -674,8 +1126,8 @@
                                             Cancel
                                         </button>
                                         <button
-                                            onClick={handleSave}
-                                            className="w-full sm:w-auto px-6 py-3 md:py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors touch-manipulation font-medium"
+                                            onClick={handleSubmit}
+                                            className="w-full sm:w-auto px-6 py-3 md:py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors touch-manipulation font-medium"
                                         >
                                             {editingPrompt ? 'Update Prompt' : 'Create Prompt'}
                                         </button>
@@ -685,11 +1137,187 @@
                         </div>
                     )}
 
+                    {/* Category Management Modal */}
+                    {isCategoryModalOpen && (
+                        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 md:p-4 z-50 overflow-y-auto">
+                            <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full my-8 max-h-[90vh] overflow-y-auto">
+                                <div className="flex justify-between items-center p-4 md:p-6 border-b sticky top-0 bg-white z-10">
+                                    <h2 className="text-xl md:text-2xl font-bold text-gray-800">
+                                        {editingCategory ? 'Edit Category' : 'Manage Categories'}
+                                    </h2>
+                                    <button
+                                        onClick={closeCategoryModal}
+                                        className="text-gray-400 hover:text-gray-600 transition-colors p-2 touch-manipulation"
+                                    >
+                                        <XIcon />
+                                    </button>
+                                </div>
+
+                                <div className="p-4 md:p-6">
+                                    {/* Add/Edit Category Form */}
+                                    <div className="mb-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
+                                        <h3 className="text-lg font-semibold text-gray-800 mb-4">
+                                            {editingCategory ? 'Edit Category/Subcategory' : 'Add New Category or Subcategory'}
+                                        </h3>
+                                        
+                                        <div className="space-y-4">
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-2">
+                                                    Name *
+                                                </label>
+                                                <input
+                                                    type="text"
+                                                    value={categoryFormData.name}
+                                                    onChange={(e) => setCategoryFormData({...categoryFormData, name: e.target.value})}
+                                                    className="w-full border border-gray-300 rounded-lg px-4 py-3 md:py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-base"
+                                                    placeholder="Enter category name"
+                                                />
+                                            </div>
+
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-2">
+                                                    Type
+                                                </label>
+                                                <select
+                                                    value={categoryFormData.parentId || ''}
+                                                    onChange={(e) => setCategoryFormData({...categoryFormData, parentId: e.target.value || null})}
+                                                    className="w-full border border-gray-300 rounded-lg px-4 py-3 md:py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-base"
+                                                >
+                                                    <option value="">Main Category</option>
+                                                    {getAvailableParentCategories().map(cat => (
+                                                        <option key={cat.id} value={cat.id}>
+                                                            Subcategory of: {cat.name}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                                <p className="text-xs text-gray-500 mt-1">
+                                                    Choose whether this is a main category or a subcategory
+                                                </p>
+                                            </div>
+
+                                            <div className="flex gap-3 justify-end">
+                                                {editingCategory && (
+                                                    <button
+                                                        onClick={() => {
+                                                            setEditingCategory(null);
+                                                            setCategoryFormData({ name: '', parentId: null });
+                                                        }}
+                                                        className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors touch-manipulation font-medium"
+                                                    >
+                                                        Cancel Edit
+                                                    </button>
+                                                )}
+                                                <button
+                                                    onClick={handleSaveCategory}
+                                                    className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors touch-manipulation font-medium"
+                                                >
+                                                    {editingCategory ? 'Update' : 'Add'} Category
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Existing Categories List */}
+                                    <div>
+                                        <h3 className="text-lg font-semibold text-gray-800 mb-4">Existing Categories</h3>
+                                        
+                                        {getMainCategories().length === 0 ? (
+                                            <p className="text-gray-500 text-center py-8">No categories yet. Create your first category above!</p>
+                                        ) : (
+                                            <div className="space-y-2">
+                                                {getMainCategories().map(category => {
+                                                    const subcategories = getSubcategories(category.id);
+                                                    const promptCount = getPromptsForCategory(category.id, true).length;
+                                                    
+                                                    return (
+                                                        <div key={category.id} className="border border-gray-200 rounded-lg overflow-hidden">
+                                                            <div className="flex items-center justify-between p-3 bg-gray-50">
+                                                                <div className="flex items-center gap-3">
+                                                                    <FolderIcon />
+                                                                    <span className="font-semibold text-gray-800">{category.name}</span>
+                                                                    <span className="text-xs text-gray-600 bg-white px-2 py-1 rounded-full">
+                                                                        {promptCount} prompts
+                                                                    </span>
+                                                                </div>
+                                                                <div className="flex gap-2">
+                                                                    <button
+                                                                        onClick={() => openCategoryModal(category)}
+                                                                        className="p-2 hover:bg-gray-200 rounded transition-colors touch-manipulation"
+                                                                        title="Edit category"
+                                                                    >
+                                                                        <EditIcon />
+                                                                    </button>
+                                                                    <button
+                                                                        onClick={() => handleDeleteCategory(category.id)}
+                                                                        className="p-2 hover:bg-gray-200 rounded transition-colors touch-manipulation"
+                                                                        title="Delete category"
+                                                                    >
+                                                                        <TrashIcon />
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+
+                                                            {subcategories.length > 0 && (
+                                                                <div className="p-3 bg-white border-t space-y-2">
+                                                                    {subcategories.map(sub => {
+                                                                        const subPromptCount = getPromptsForSubcategory(sub.id).length;
+                                                                        return (
+                                                                            <div key={sub.id} className="flex items-center justify-between p-2 bg-gray-50 rounded pl-8">
+                                                                                <div className="flex items-center gap-3">
+                                                                                    <span className="text-sm">↳</span>
+                                                                                    <FolderIcon />
+                                                                                    <span className="text-gray-800">{sub.name}</span>
+                                                                                    <span className="text-xs text-gray-600 bg-white px-2 py-1 rounded-full">
+                                                                                        {subPromptCount} prompts
+                                                                                    </span>
+                                                                                </div>
+                                                                                <div className="flex gap-2">
+                                                                                    <button
+                                                                                        onClick={() => openCategoryModal(sub)}
+                                                                                        className="p-1 hover:bg-gray-200 rounded transition-colors touch-manipulation"
+                                                                                        title="Edit subcategory"
+                                                                                    >
+                                                                                        <EditIcon />
+                                                                                    </button>
+                                                                                    <button
+                                                                                        onClick={() => handleDeleteCategory(sub.id)}
+                                                                                        className="p-1 hover:bg-gray-200 rounded transition-colors touch-manipulation"
+                                                                                        title="Delete subcategory"
+                                                                                    >
+                                                                                        <TrashIcon />
+                                                                                    </button>
+                                                                                </div>
+                                                                            </div>
+                                                                        );
+                                                                    })}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div className="flex justify-end mt-6 pt-4 border-t">
+                                        <button
+                                            onClick={closeCategoryModal}
+                                            className="px-6 py-3 md:py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg transition-colors touch-manipulation font-medium"
+                                        >
+                                            Done
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Custom Model Modal */}
                     {isModelModalOpen && (
                         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 md:p-4 z-50">
                             <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
                                 <div className="flex justify-between items-center p-4 md:p-6 border-b">
-                                    <h2 className="text-xl md:text-2xl font-bold text-gray-800">Add AI Model</h2>
+                                    <h2 className="text-xl md:text-2xl font-bold text-gray-800">Add Custom AI Model</h2>
                                     <button
                                         onClick={closeModelModal}
                                         className="text-gray-400 hover:text-gray-600 transition-colors p-2 touch-manipulation"
@@ -699,7 +1327,7 @@
                                 </div>
 
                                 <div className="p-4 md:p-6">
-                                    <div className="mb-4">
+                                    <div className="mb-6">
                                         <label className="block text-sm font-medium text-gray-700 mb-2">
                                             Model Name *
                                         </label>
@@ -745,6 +1373,7 @@
                         </div>
                     )}
 
+                    {/* FAQ Modal */}
                     {isFaqOpen && (
                         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 md:p-4 z-50 overflow-y-auto">
                             <div className="bg-white rounded-lg shadow-xl max-w-3xl w-full my-8 max-h-[90vh] overflow-y-auto">
@@ -763,10 +1392,22 @@
                                         <p className="text-gray-700">All changes sync automatically across your devices.</p>
                                     </div>
                                     <div>
-                                        <h3 className="font-semibold mb-2">📎 Attaching Documents</h3>
-                                        <p className="text-gray-700 mb-2">You can now upload reference documents (Word, PDF, etc.) to any prompt:</p>
+                                        <h3 className="font-semibold mb-2">📁 NEW: Categories and Subcategories</h3>
+                                        <p className="text-gray-700 mb-2">Organize your prompts with a two-level folder structure:</p>
                                         <ul className="list-disc ml-6 text-gray-700 space-y-1">
-                                            <li>Click the "Upload" button in the "Attached Documents" section</li>
+                                            <li>Click "Categories" to create and manage categories</li>
+                                            <li>Create main categories (e.g., "French Language", "Coding")</li>
+                                            <li>Add subcategories within categories (e.g., "AI Chat Facilitators" under "French Language")</li>
+                                            <li>When creating/editing prompts, assign them to a category and optionally a subcategory</li>
+                                            <li>Click on categories and subcategories to expand/collapse them</li>
+                                            <li>Easily reassign prompts to different categories when editing</li>
+                                        </ul>
+                                    </div>
+                                    <div>
+                                        <h3 className="font-semibold mb-2">📎 Attaching Documents</h3>
+                                        <p className="text-gray-700 mb-2">You can upload reference documents (Word, PDF, etc.) to any prompt:</p>
+                                        <ul className="list-disc ml-6 text-gray-700 space-y-1">
+                                            <li>Click the "Upload" button in the "Attached Documents" section when editing</li>
                                             <li>Select one or multiple files (max 10 MB each)</li>
                                             <li>Files are saved with your prompt in the cloud</li>
                                             <li>Download files when you need them by clicking the download icon</li>
@@ -775,21 +1416,22 @@
                                     </div>
                                     <div>
                                         <h3 className="font-semibold mb-2">Creating Prompts</h3>
-                                        <p className="text-gray-700">Click "New Prompt" and fill in the name, description, and prompt text.</p>
+                                        <p className="text-gray-700">Click "New Prompt", fill in the name, description, select a category (and optionally a subcategory), and enter your prompt text.</p>
                                     </div>
                                     <div>
                                         <h3 className="font-semibold mb-2">Using Prompts</h3>
                                         <p className="text-gray-700">Select an AI model, click "Open AI", choose login or guest mode, then paste the prompt when the AI opens. If files are attached, download them first and upload to the AI along with your prompt.</p>
                                     </div>
                                     <div>
-                                        <h3 className="font-semibold mb-2">Editing</h3>
-                                        <p className="text-gray-700">Click the ✏️ icon to edit. The version number automatically increments with each update.</p>
+                                        <h3 className="font-semibold mb-2">Editing and Reassigning</h3>
+                                        <p className="text-gray-700">Click the ✏️ icon to edit. You can change the category and subcategory to reorganize your prompts. The version number automatically increments with each update.</p>
                                     </div>
                                 </div>
                             </div>
                         </div>
                     )}
 
+                    {/* Access Mode Modal */}
                     {showAccessModal && (
                         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 md:p-4 z-50">
                             <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
